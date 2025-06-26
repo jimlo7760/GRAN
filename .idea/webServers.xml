@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="a6a5d2ee-ba32-4cec-8cdd-63eb084721ed" name="DSPServer">
+        <fileTransfer accessType="SFTP" host="dspserver.cs.rpi.edu" port="22" sshConfigId="49348660-4134-4b87-9ffa-5d06097fa934" sshConfig="luy25@dspserver.cs.rpi.edu:22 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>

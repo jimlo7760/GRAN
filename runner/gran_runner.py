@@ -27,7 +27,7 @@ from utils.eval_helper import *
 from utils.dist_helper import compute_mmd, gaussian_emd, gaussian, emd, gaussian_tv
 from utils.vis_helper import draw_graph_list, draw_graph_list_separate
 from utils.data_parallel import DataParallel
-
+from utils.io_helper import save_graph_as_npz, save_graph_as_npz_strict
 
 try:
   ###
@@ -62,7 +62,7 @@ def get_graph(adj):
   adj = adj[~np.all(adj == 0, axis=1)]
   adj = adj[:, ~np.all(adj == 0, axis=0)]
   adj = np.asmatrix(adj)
-  G = nx.from_numpy_matrix(adj)
+  G = nx.from_numpy_array(adj)
   return G
 
 
@@ -94,11 +94,13 @@ class GranRunner(object):
     self.gpus = config.gpus
     self.device = config.device
     self.writer = SummaryWriter(config.save_dir)
+    self.total_nodes = config.dataset.total_nodes
     self.is_vis = config.test.is_vis
     self.better_vis = config.test.better_vis
     self.num_vis = config.test.num_vis
     self.vis_num_row = config.test.vis_num_row
     self.is_single_plot = config.test.is_single_plot
+
     self.num_gpus = len(self.gpus)
     self.is_shuffle = False
 
@@ -108,7 +110,7 @@ class GranRunner(object):
       self.config.save_dir = self.train_conf.resume_dir
 
     ### load graphs
-    self.graphs = create_graphs(config.dataset.name, data_dir=config.dataset.data_path)
+    self.graphs = create_graphs(config.dataset.type, config.dataset.name, data_dir=config.dataset.data_path)
     
     self.train_ratio = config.dataset.train_ratio
     self.dev_ratio = config.dataset.dev_ratio
@@ -211,6 +213,9 @@ class GranRunner(object):
     # Training Loop
     iter_count = 0    
     results = defaultdict(list)
+
+    best_loss = float('inf')
+
     for epoch in range(resume_epoch, self.train_conf.max_epoch):
       model.train()
       lr_scheduler.step()
@@ -222,7 +227,7 @@ class GranRunner(object):
         batch_data = []
         if self.use_gpu:
           for _ in self.gpus:
-            data = train_iterator.next()
+            data = next(train_iterator)
             batch_data.append(data)
             iter_count += 1
         
@@ -266,9 +271,21 @@ class GranRunner(object):
           logger.info("NLL Loss @ epoch {:04d} iteration {:08d} = {}".format(epoch + 1, iter_count, train_loss))
 
       # snapshot model
-      if (epoch + 1) % self.train_conf.snapshot_epoch == 0:
-        logger.info("Saving Snapshot @ epoch {:04d}".format(epoch + 1))
-        snapshot(model.module if self.use_gpu else model, optimizer, self.config, epoch + 1, scheduler=lr_scheduler)
+      # if (epoch + 1) % self.train_conf.snapshot_epoch == 0:
+      #   logger.info("Saving Snapshot @ epoch {:04d}".format(epoch + 1))
+      #   snapshot(model.module if self.use_gpu else model, optimizer, self.config, epoch + 1, scheduler=lr_scheduler)
+
+        if avg_train_loss < best_loss:
+          best_loss = avg_train_loss
+          logger.info(f"→ New best model @ epoch {epoch + 1}, iter {iter_count}: loss={best_loss:.4f}")
+          snapshot(
+            model.module if self.use_gpu else model,
+            optimizer,
+            self.config,
+            epoch + 1,
+            scheduler=lr_scheduler,
+            tag='best'
+          )
     
     pickle.dump(results, open(os.path.join(self.config.save_dir, 'train_stats.p'), 'wb'))
     self.writer.close()
@@ -316,6 +333,12 @@ class GranRunner(object):
           
       graphs_gen = [get_graph(aa) for aa in A_pred]
 
+    out_dir = os.path.join(self.config.save_dir, 'generated')
+    for i, G in enumerate(graphs_gen):
+      out_name = os.path.join(out_dir, f'graph_{i:03d}.npz')
+      # save_graph_as_npz(G, out_name)
+      save_graph_as_npz_strict(G, out_name, total_nodes=self.total_nodes)
+
     ### Visualize Generated Graphs
     if self.is_vis:
       num_col = self.vis_num_row
@@ -358,6 +381,10 @@ class GranRunner(object):
             fname=save_name[:-4],
             is_single=True,
             layout='spring')
+    if len(self.graphs_dev) == 0 or len(self.graphs_test) == 0:
+      logger.warning("Dev/test split is empty – skipping MMD evaluation.")
+     # still save the generated graphs as .npz if you added that code
+    return
 
     ### Evaluation
     if self.config.dataset.name in ['lobster']:

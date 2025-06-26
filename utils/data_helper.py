@@ -156,7 +156,151 @@ def graph_load_batch(data_dir,
   return graphs
 
 
-def create_graphs(graph_type, data_dir='data', noise=10.0, seed=1234):
+def load_cora_graph(data_dir):
+  return load_planetoid_graph('cora', data_dir)
+
+def load_citeseer_graph(data_dir):
+  return load_planetoid_graph('citeseer', data_dir)
+
+def load_planetoid_graph(name, data_dir='data'):
+    """
+    Return [G] where G contains *all* N nodes of the Planetoid citation
+    network (Cora = 2708, Citeseer = 3312, Pubmed = 19717).
+
+    Parameters
+    ----------
+    name : str      'cora' | 'citeseer' | 'pubmed'  (case-insensitive)
+    data_dir : str   folder that holds  data/<name>/ind.<name>.*  files
+    """
+
+    name = name.lower()
+    path = lambda suf: os.path.join(data_dir, name, f'ind.{name}.{suf}')
+
+
+    # ------------------------------------------------------------------
+    # 1) read the adjacency dictionary that *does* exist
+    # ------------------------------------------------------------------
+    with open(path('graph'), 'rb') as f:
+        adj_dict = pickle.load(f, encoding='latin1')
+
+    # ------------------------------------------------------------------
+    # 2) figure out how many *total* nodes there should be
+    #    • use test.index (always present and includes the max id)
+    #      fall back to the largest id seen in adj_dict otherwise
+    # ------------------------------------------------------------------
+    try:
+        test_idx = np.loadtxt(path('test.index'), dtype=int)
+        num_nodes = int(test_idx.max()) + 1
+    except OSError:
+        num_nodes = max(adj_dict.keys()) + 1       # rarely needed
+
+    # ------------------------------------------------------------------
+    # 3) build the full graph, adding isolated nodes explicitly
+    # ------------------------------------------------------------------
+    G = nx.Graph()
+    G.add_nodes_from(range(num_nodes))            # stubs for *every* node
+    for src, nbrs in adj_dict.items():
+        G.add_edges_from((src, dst) for dst in nbrs)
+    G.remove_edges_from(nx.selfloop_edges(G))     # optional: strip loops
+
+    # **no** LCC chopping here!
+    return [G]
+
+def load_polblogs_graph(data_dir='data'):
+    """
+    Return a list with ONE NetworkX graph containing **all 1 490 nodes**
+    of the NetSet/T-SV PolBlogs dataset.
+
+    Expected files (tab-separated, no headers) in
+      f"{data_dir}/polblogs/":  adjacency.tsv, names.tsv, labels.tsv
+    """
+    import os, networkx as nx, numpy as np
+
+    folder = os.path.join(data_dir, 'polblogs')
+    # ---------- 1 ) read node meta ----------
+    names   = [line.strip()        for line in open(os.path.join(folder, 'names.tsv'))]
+    labels  = [int(line.strip())   for line in open(os.path.join(folder, 'labels.tsv'))]
+    n       = len(names)                       # 1 490
+
+    # ---------- 2 ) build an empty graph with all nodes ----------
+    G = nx.Graph()
+    G.add_nodes_from(range(n))                 # 0 … 1489
+    for i in range(n):
+        G.nodes[i]['url']   = names[i]
+        G.nodes[i]['label'] = labels[i]        # 0=liberal, 1=conservative
+
+    # ---------- 3 ) add edges ----------
+    with open(os.path.join(folder, 'adjacency.tsv')) as f:
+        for line in f:
+            u, v, _ = line.split('\t')
+            G.add_edge(int(u), int(v))         # duplicates collapse automatically
+    G.remove_edges_from(nx.selfloop_edges(G))
+
+    return [G]                                 # GRAN expects a *list*
+
+# ------------------------------------------------------------------
+#  Single-graph loader for a pickled adjacency matrix
+# ------------------------------------------------------------------
+def load_adj_pkl_graph(fname_or_path, data_dir='data'):
+    """
+    Parameters
+    ----------
+    fname_or_path : str
+        Either an absolute path or a file name relative to <data_dir>/poisoned/.
+        The pickle can contain:
+          • scipy.sparse matrix
+          • numpy ndarray
+          • torch Tensor
+          • dict with key 'adj' holding one of the above
+    Returns
+    -------
+    [G] : list(networkx.Graph)  – GRAN always wants a *list*.
+    """
+    import os, pickle, numpy as np, networkx as nx
+    from scipy import sparse as sp
+    try:
+        import torch
+        is_tensor = lambda x: torch.is_tensor(x)
+    except ImportError:             # just in case
+        is_tensor = lambda x: False
+
+    # --------------------------------------------------------------
+    # 1) resolve path
+    # --------------------------------------------------------------
+    if not os.path.isabs(fname_or_path):
+        fname_or_path = os.path.join(data_dir, fname_or_path)
+
+    # --------------------------------------------------------------
+    # 2) un-pickle
+    # --------------------------------------------------------------
+    with open(fname_or_path, 'rb') as f:
+        obj = pickle.load(f, encoding='latin1')
+
+    if isinstance(obj, dict) and 'adj' in obj:
+        obj = obj['adj']                        # unwrap common pattern
+
+    # --------------------------------------------------------------
+    # 3) dense / sparse / tensor → NetworkX
+    # --------------------------------------------------------------
+    if is_tensor(obj):                          # torch.Tensor
+        obj = obj.cpu().numpy()
+        G = nx.from_numpy_array(obj)
+    elif sp.issparse(obj):                      # scipy.sparse
+        G = nx.from_scipy_sparse_matrix(obj)
+    else:                                       # assume NumPy array-like
+        obj = np.asarray(obj)
+        G = nx.from_numpy_array(obj)
+
+    # optional clean-up
+    G.remove_edges_from(nx.selfloop_edges(G))
+    G = nx.convert_node_labels_to_integers(G)
+
+    return [G]
+
+
+
+
+def create_graphs(graph_type, graph_name, data_dir='data', noise=10.0, seed=1234):
   npr = np.random.RandomState(seed)
   ### load datasets
   graphs = []
@@ -205,6 +349,15 @@ def create_graphs(graph_type, data_dir='data', noise=10.0, seed=1234):
         name='FIRSTMM_DB',
         node_attributes=False,
         graph_labels=True)
+  elif graph_type == 'raw':
+    if graph_name == 'cora':
+        graphs = load_cora_graph(data_dir)
+    elif graph_name == 'citeseer':
+        graphs = load_citeseer_graph(data_dir)
+    elif graph_name == 'polblogs':
+        graphs = load_polblogs_graph(data_dir)
+  elif graph_type == 'poison':
+    graphs = load_adj_pkl_graph(graph_name, data_dir)
 
   num_nodes = [gg.number_of_nodes() for gg in graphs]
   num_edges = [gg.number_of_edges() for gg in graphs]

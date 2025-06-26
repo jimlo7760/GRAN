@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="SshConfigs">
+    <configs>
+      <sshConfig authType="PASSWORD" host="dspserver.cs.rpi.edu" id="49348660-4134-4b87-9ffa-5d06097fa934" port="22" nameFormat="DESCRIPTIVE" username="luy25" useOpenSSHConfig="true" />
+    </configs>
+  </component>
+</project>
